@@ -82,13 +82,12 @@ def load_data():
 def load_fixtures():
     try:
         df = pd.read_csv('https://www.football-data.co.uk/fixtures.csv')
-        df = df[df['Div'] == 'E0'].copy()
         df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
         today = pd.Timestamp.now().normalize()
         df = df[df['Date'] >= today]
-        for col in ['B365H','B365D','B365A']:
+        for col in ['B365H', 'B365D', 'B365A']:
             df[col] = pd.to_numeric(df.get(col), errors='coerce')
-        df = df.dropna(subset=['HomeTeam','AwayTeam'])
+        df = df.dropna(subset=['HomeTeam', 'AwayTeam'])
         return df.sort_values('Date').reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
@@ -201,7 +200,7 @@ def get_form(data, team, n=6):
 def form_html(results, label):
     bars = "".join(f'<span class="form-bar form-{r.lower()}">{r}</span>' for r in results)
     return (f'<div class="form-wrap">'
-            f'<span style="font-family:\'DM Mono\',monospace;font-size:.65rem;color:#444;margin-right:8px;">'
+            f'<span style="font-family:DM Mono,monospace;font-size:.65rem;color:#444;margin-right:8px;">'
             f'{label[:3].upper()}</span>{bars}</div>')
 
 
@@ -243,7 +242,7 @@ with st.sidebar:
                                help="Minimum edge to flag as value in gameweek scanner.")
     st.markdown("---")
     st.markdown(f"""
-    <div style="font-family:'DM Mono',monospace;font-size:.65rem;color:#444;line-height:2.2;">
+    <div style="font-family:DM Mono,monospace;font-size:.65rem;color:#444;line-height:2.2;">
     DATA THROUGH<br><span style="color:#7fff7f">{last_date}</span><br><br>
     MATCHES LOADED<br><span style="color:#7fff7f">{total_matches:,}</span><br><br>
     CURRENT SEASON<br><span style="color:#7fff7f">2025-26 · LIVE</span>
@@ -351,17 +350,34 @@ with tab1:
 # TAB 2 — GAMEWEEK SCANNER
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab2:
-    st.markdown('<div class="section-heading">Upcoming Premier League fixtures — auto-analysed</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-heading">Upcoming fixtures — auto-analysed</div>', unsafe_allow_html=True)
 
     if fixtures_raw.empty:
         st.warning("Could not load fixtures. Try again shortly.")
     else:
-        days_ahead = st.slider("Days ahead", 1, 14, 7, 1, key="days_ahead")
+        # League selector — lets you see what's actually in the feed
+        div_labels = {
+            'E0':'Premier League','E1':'Championship','E2':'League One',
+            'E3':'League Two','EC':'Conference','SC0':'Scottish Prem',
+            'D1':'Bundesliga','I1':'Serie A','SP1':'La Liga','F1':'Ligue 1',
+            'N1':'Eredivisie','P1':'Primeira Liga','B1':'Pro League',
+        }
+        available_divs = sorted(fixtures_raw['Div'].dropna().unique().tolist())
+        div_display = [div_labels.get(d, d) for d in available_divs]
+        default_idx = available_divs.index('E0') if 'E0' in available_divs else 0
+        selected_display = st.selectbox("League", div_display, index=default_idx)
+        selected_div = available_divs[div_display.index(selected_display)]
+
+        days_ahead = st.slider("Days ahead", 1, 30, 14, 1, key="days_ahead")
         cutoff = pd.Timestamp.now().normalize() + pd.Timedelta(days=days_ahead)
-        fixtures = fixtures_raw[fixtures_raw['Date'] <= cutoff].copy()
+
+        fixtures = fixtures_raw[
+            (fixtures_raw['Div'] == selected_div) &
+            (fixtures_raw['Date'] <= cutoff)
+        ].copy()
 
         if fixtures.empty:
-            st.info(f"No Premier League fixtures in the next {days_ahead} days.")
+            st.info(f"No {selected_display} fixtures in the next {days_ahead} days. Try extending the window or switching league.")
         else:
             value_only = st.checkbox("Show value bets only", value=False)
             thresh = edge_threshold / 100
@@ -416,20 +432,21 @@ with tab2:
                 })
 
             if not results_rows:
-                st.info("No matches could be analysed — teams may not be in the model yet.")
+                st.info("No matches could be analysed — these teams are not in the model. The model only has ratings for Premier League teams.")
             else:
                 df_out = pd.DataFrame(results_rows)
                 if value_only:
                     df_out = df_out[df_out['best_edge'] >= thresh]
 
                 if df_out.empty:
-                    st.info(f"No value bets found above {edge_threshold}% threshold in this window.")
+                    st.info(f"No value bets found above {edge_threshold}% in this window.")
                 else:
                     for _, r in df_out.sort_values(['best_edge','date'], ascending=[False,True]).iterrows():
                         has_value = r['has_odds'] and r['best_edge'] >= thresh
 
                         def pill(label, edge, has_o):
-                            if not has_o: return ""
+                            if not has_o:
+                                return ""
                             cls = "edge-pill-pos" if edge >= thresh else "edge-pill-neu"
                             sign = "+" if edge >= 0 else ""
                             return f'<span class="edge-pill {cls}">{label} {sign}{edge*100:.1f}%</span>'
@@ -441,9 +458,11 @@ with tab2:
                         value_flag = ""
                         if has_value:
                             outcome_map = {'H':'HOME WIN','D':'DRAW','A':'AWAY WIN'}
-                            value_flag = (f'&nbsp;&nbsp;<span style="font-family:\'DM Mono\','
-                                          f'monospace;font-size:.7rem;color:#7fff7f;">'
-                                          f'⚑ {outcome_map[r["best_label"]]} @ {r["best_odds"]:.2f}</span>')
+                            value_flag = (
+                                f'&nbsp;&nbsp;<span style="font-family:DM Mono,monospace;'
+                                f'font-size:.7rem;color:#7fff7f;">'
+                                f'⚑ {outcome_map[r["best_label"]]} @ {r["best_odds"]:.2f}</span>'
+                            )
 
                         fh = get_form(data, r['home'])
                         fa = get_form(data, r['away'])
@@ -453,7 +472,36 @@ with tab2:
                             parts = []
                             for x in results:
                                 colour = colours.get(x, '#555')
-                            parts.append(
-                                f'<span style="color:{colour};font-family:DM Mono,monospace;font-size:.65rem;">{x}</span>'
-                            )
+                                parts.append(
+                                    f'<span style="color:{colour};font-family:DM Mono,monospace;font-size:.65rem;">{x}</span>'
+                                )
                             return " ".join(parts)
+
+                        st.markdown(f"""
+                        <div class="fixture-row">
+                            <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;">
+                                <div>
+                                    <span class="fixture-teams">{r['home']} vs {r['away']}</span>
+                                    {value_flag}
+                                </div>
+                                <div class="fixture-meta">{r['date'].strftime('%a %d %b')}</div>
+                            </div>
+                            <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+                                {pills}
+                            </div>
+                            <div style="margin-top:6px;font-family:DM Mono,monospace;font-size:.65rem;color:#444;">
+                                H {r['p_home']*100:.1f}% &nbsp;·&nbsp;
+                                D {r['p_draw']*100:.1f}% &nbsp;·&nbsp;
+                                A {r['p_away']*100:.1f}%
+                                &nbsp;&nbsp;|&nbsp;&nbsp; xGoals {r['lam_h']:.2f}–{r['lam_a']:.2f}
+                                &nbsp;&nbsp;|&nbsp;&nbsp; top score {r['top1'][0]} ({r['top1'][1]}%)
+                            </div>
+                            <div style="margin-top:4px;">
+                                <span style="font-family:DM Mono,monospace;font-size:.6rem;color:#333;margin-right:6px;">{r['home'][:3].upper()}</span>
+                                {mini_form(fh)}
+                                &nbsp;&nbsp;
+                                <span style="font-family:DM Mono,monospace;font-size:.6rem;color:#333;margin-right:6px;">{r['away'][:3].upper()}</span>
+                                {mini_form(fa)}
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
