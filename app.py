@@ -197,6 +197,7 @@ def load_data():
         '2022-23': 'https://www.football-data.co.uk/mmz4281/2223/E0.csv',
         '2023-24': 'https://www.football-data.co.uk/mmz4281/2324/E0.csv',
         '2024-25': 'https://www.football-data.co.uk/mmz4281/2425/E0.csv',
+        '2025-26': 'https://www.football-data.co.uk/mmz4281/2526/E0.csv'
     }
     dfs = []
     for season, url in urls.items():
