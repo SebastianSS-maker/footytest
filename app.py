@@ -449,4 +449,11 @@ with tab2:
                         fa = get_form(data, r['away'])
 
                         def mini_form(results):
-                            colours = {'
+    colours = {'W':'#7fff7f','D':'#ffff7f','L':'#ff7f7f'}
+    parts = []
+    for x in results:
+        colour = colours.get(x, '#555')
+        parts.append(
+            f'<span style="color:{colour};font-family:DM Mono,monospace;font-size:.65rem;">{x}</span>'
+        )
+    return " ".join(parts)
