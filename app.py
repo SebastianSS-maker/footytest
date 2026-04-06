@@ -319,3 +319,134 @@ with tab1:
                     lmap = {edge_h:'HOME WIN',edge_d:'DRAW',edge_a:'AWAY WIN'}
                     st.markdown(f'<div class="edge-banner">⚑ VALUE DETECTED · {lmap[best_edge]} · +{best_edge*100:.1f}% EDGE</div>', unsafe_allow_html=True)
                 else:
+                    st.markdown('<div class="no-value-banner">NO SIGNIFICANT VALUE DETECTED</div>', unsafe_allow_html=True)
+
+                st.markdown(f"""
+                <div class="lambda-display" style="margin-bottom:.25rem;">
+                    projected goals — {home}: <strong style="color:#e8e8e0">{result['lambda_home']}</strong>
+                    &nbsp;·&nbsp; {away}: <strong style="color:#e8e8e0">{result['lambda_away']}</strong>
+                </div>
+                <div class="lambda-display" style="margin-bottom:1rem;">
+                    most likely — {"   ".join(f"{s} ({p}%)" for s,p in result['top5'])}
+                </div>""", unsafe_allow_html=True)
+
+                fig, ax = plt.subplots(figsize=(7,4.5))
+                fig.patch.set_facecolor('#0a0a0a')
+                ax.set_facecolor('#0a0a0a')
+                sns.heatmap(result['matrix'][:6,:6]*100, annot=True, fmt='.1f', cmap='Greens',
+                            linewidths=0.5, linecolor='#1a1a1a', ax=ax, cbar=False,
+                            xticklabels=list(range(6)), yticklabels=list(range(6)))
+                ax.set_xlabel(f"{away} goals", color='#555', fontsize=9, labelpad=8)
+                ax.set_ylabel(f"{home} goals", color='#555', fontsize=9, labelpad=8)
+                ax.tick_params(colors='#555', labelsize=8)
+                for sp in ax.spines.values(): sp.set_visible(False)
+                ax.set_title("Scoreline probability matrix (%)", color='#444', fontsize=8,
+                             pad=10, fontfamily='monospace', loc='left')
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — GAMEWEEK SCANNER
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab2:
+    st.markdown('<div class="section-heading">Upcoming Premier League fixtures — auto-analysed</div>', unsafe_allow_html=True)
+
+    if fixtures_raw.empty:
+        st.warning("Could not load fixtures. Try again shortly.")
+    else:
+        days_ahead = st.slider("Days ahead", 1, 14, 7, 1, key="days_ahead")
+        cutoff = pd.Timestamp.now().normalize() + pd.Timedelta(days=days_ahead)
+        fixtures = fixtures_raw[fixtures_raw['Date'] <= cutoff].copy()
+
+        if fixtures.empty:
+            st.info(f"No Premier League fixtures in the next {days_ahead} days.")
+        else:
+            value_only = st.checkbox("Show value bets only", value=False)
+            thresh = edge_threshold / 100
+
+            results_rows = []
+            for _, row in fixtures.iterrows():
+                home_t = row['HomeTeam']
+                away_t = row['AwayTeam']
+                res = predict_dc(home_t, away_t, teams_model, avg_h, avg_a, rho=rho)
+                if res is None:
+                    continue
+
+                has_odds = (pd.notna(row.get('B365H')) and
+                            pd.notna(row.get('B365D')) and
+                            pd.notna(row.get('B365A')))
+
+                if has_odds:
+                    b365h = float(row['B365H'])
+                    b365d = float(row['B365D'])
+                    b365a = float(row['B365A'])
+                    impl_h = 1/b365h
+                    impl_d = 1/b365d
+                    impl_a = 1/b365a
+                    edge_h = res['home_win'] - impl_h
+                    edge_d = res['draw']     - impl_d
+                    edge_a = res['away_win'] - impl_a
+                    best_e = max(edge_h, edge_d, edge_a)
+                    best_label = {edge_h:'H', edge_d:'D', edge_a:'A'}[best_e]
+                    best_odds  = {edge_h:b365h, edge_d:b365d, edge_a:b365a}[best_e]
+                else:
+                    edge_h = edge_d = edge_a = best_e = 0
+                    best_label = '-'
+                    best_odds  = None
+
+                results_rows.append({
+                    'date':       row['Date'],
+                    'home':       home_t,
+                    'away':       away_t,
+                    'lam_h':      res['lambda_home'],
+                    'lam_a':      res['lambda_away'],
+                    'p_home':     res['home_win'],
+                    'p_draw':     res['draw'],
+                    'p_away':     res['away_win'],
+                    'edge_h':     edge_h,
+                    'edge_d':     edge_d,
+                    'edge_a':     edge_a,
+                    'best_edge':  best_e,
+                    'best_label': best_label,
+                    'best_odds':  best_odds,
+                    'has_odds':   has_odds,
+                    'top1':       res['top5'][0],
+                })
+
+            if not results_rows:
+                st.info("No matches could be analysed — teams may not be in the model yet.")
+            else:
+                df_out = pd.DataFrame(results_rows)
+                if value_only:
+                    df_out = df_out[df_out['best_edge'] >= thresh]
+
+                if df_out.empty:
+                    st.info(f"No value bets found above {edge_threshold}% threshold in this window.")
+                else:
+                    for _, r in df_out.sort_values(['best_edge','date'], ascending=[False,True]).iterrows():
+                        has_value = r['has_odds'] and r['best_edge'] >= thresh
+
+                        def pill(label, edge, has_o):
+                            if not has_o: return ""
+                            cls = "edge-pill-pos" if edge >= thresh else "edge-pill-neu"
+                            sign = "+" if edge >= 0 else ""
+                            return f'<span class="edge-pill {cls}">{label} {sign}{edge*100:.1f}%</span>'
+
+                        pills = (pill("H", r['edge_h'], r['has_odds']) +
+                                 pill("D", r['edge_d'], r['has_odds']) +
+                                 pill("A", r['edge_a'], r['has_odds']))
+
+                        value_flag = ""
+                        if has_value:
+                            outcome_map = {'H':'HOME WIN','D':'DRAW','A':'AWAY WIN'}
+                            value_flag = (f'&nbsp;&nbsp;<span style="font-family:\'DM Mono\','
+                                          f'monospace;font-size:.7rem;color:#7fff7f;">'
+                                          f'⚑ {outcome_map[r["best_label"]]} @ {r["best_odds"]:.2f}</span>')
+
+                        fh = get_form(data, r['home'])
+                        fa = get_form(data, r['away'])
+
+                        def mini_form(results):
+                            colours = {'
