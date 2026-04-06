@@ -210,37 +210,74 @@ def load_data():
 
 
 @st.cache_data(show_spinner=False)
-def build_model(_data, xi=0.0065):
-    reference_date = _data['Date'].max()
+def build_model(data: pd.DataFrame, xi: float = 0.0065, form_window: int = 10):
+    df = data.copy()
+    ref = df['Date'].max()
+    df['w'] = np.exp(-xi * (ref - df['Date']).dt.days)
 
-    def time_weight(date):
-        return np.exp(-xi * (reference_date - date).days)
+    # Hard recent-form window — last N matches per team weighted separately
+    # This captures current shape independently of the full historical model
+    def get_recent(team_col, goals_col, n=form_window):
+        rows = []
+        for team, group in df.groupby(team_col):
+            recent = group.nlargest(n, 'Date')
+            rows.append({
+                'team': team,
+                'recent_avg': recent[goals_col].mean(),
+                'recent_weight': len(recent) / n  # confidence — penalise teams with few matches
+            })
+        return pd.DataFrame(rows).set_index('team')
 
-    data = _data.copy()
-    data['weight'] = data['Date'].apply(time_weight)
+    rh = get_recent('HomeTeam', 'FTHG')  # recent home goals scored
+    rc = get_recent('HomeTeam', 'FTAG')  # recent home goals conceded
+    ra = get_recent('AwayTeam', 'FTAG')  # recent away goals scored
+    rac = get_recent('AwayTeam', 'FTHG') # recent away goals conceded
 
-    def weighted_avg(df, team_col, goals_col, weight_col):
-        return df.groupby(team_col).apply(
-            lambda x: np.average(x[goals_col], weights=x[weight_col])
+    # Full time-weighted averages (historical signal)
+    def wavg(gc, tc):
+        return df.groupby(tc).apply(
+            lambda x: np.average(x[gc], weights=x['w'])
+            if x['w'].sum() > 0 else x[gc].mean()
         )
 
-    hs = weighted_avg(data, 'HomeTeam', 'FTHG', 'weight')
-    hc = weighted_avg(data, 'HomeTeam', 'FTAG', 'weight')
-    as_ = weighted_avg(data, 'AwayTeam', 'FTAG', 'weight')
-    ac = weighted_avg(data, 'AwayTeam', 'FTHG', 'weight')
+    hs = wavg('FTHG', 'HomeTeam')
+    hc = wavg('FTAG', 'HomeTeam')
+    as_ = wavg('FTAG', 'AwayTeam')
+    ac = wavg('FTHG', 'AwayTeam')
 
-    avg_h = hs.mean()
-    avg_a = as_.mean()
+    avg_h, avg_a = hs.mean(), as_.mean()
+
+    # Blend: 40% historical ratings, 60% recent form window
+    # You can expose these weights in the sidebar later
+    HIST_W  = 0.4
+    FORM_W  = 0.6
+
+    def blend(hist, recent_df, col):
+        combined = hist.to_frame('hist').join(recent_df[['recent_avg', 'recent_weight']])
+        combined['blended'] = (
+            HIST_W * combined['hist'] +
+            FORM_W * combined['recent_avg'] * combined['recent_weight']
+        )
+        # Fall back to historical if recent is missing
+        combined['blended'] = combined['blended'].fillna(combined['hist'])
+        return combined['blended']
+
+    hs_b  = blend(hs,  rh,  'recent_avg')
+    hc_b  = blend(hc,  rc,  'recent_avg')
+    as_b  = blend(as_, ra,  'recent_avg')
+    ac_b  = blend(ac,  rac, 'recent_avg')
+
+    avg_h_b = hs_b.mean()
+    avg_a_b = as_b.mean()
 
     teams = pd.DataFrame({
-        'attack_h':  hs  / avg_h,
-        'defense_h': hc  / avg_a,
-        'attack_a':  as_ / avg_a,
-        'defense_a': ac  / avg_h,
-    })
+        'attack_h':  hs_b  / avg_h_b,
+        'defense_h': hc_b  / avg_a_b,
+        'attack_a':  as_b  / avg_a_b,
+        'defense_a': ac_b  / avg_h_b,
+    }).dropna()
 
-    return teams, avg_h, avg_a
-
+    return teams, avg_h_b, avg_a_b
 
 def dc_correction(hg, ag, lh, la, rho=-0.1):
     if hg == 0 and ag == 0:   return 1 - (lh * la * rho)
